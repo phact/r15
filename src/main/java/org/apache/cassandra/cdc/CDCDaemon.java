@@ -15,12 +15,14 @@ import com.google.common.collect.Sets;
 import com.datastax.driver.core.Cluster;
 import org.apache.cassandra.config.CFMetaData;
 import org.apache.cassandra.config.Config;
+import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.config.Schema;
 import org.apache.cassandra.db.Mutation;
 import org.apache.cassandra.db.commitlog.CommitLogDescriptor;
 import org.apache.cassandra.db.commitlog.CommitLogPosition;
 import org.apache.cassandra.db.commitlog.CommitLogReadHandler;
 import org.apache.cassandra.db.commitlog.CommitLogReader;
+import org.apache.cassandra.utils.memory.BufferPool;
 
 public class CDCDaemon
 {
@@ -155,6 +157,7 @@ public class CDCDaemon
 
     public void start()
     {
+        DatabaseDescriptor.toolInitialization();
         // Since CDC is only in newer Cassandras, we know how to read the schema values from it
         reloadSchema();
         executor.scheduleAtFixedRate(this::iteration, 0, 250, TimeUnit.MILLISECONDS);
