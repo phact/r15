@@ -1,7 +1,9 @@
 #!/bin/bash
 
-IP=hosthere
+IP=localhost
+#REPLICATION="{'class':'NetworkTopologyStrategy','AWS':3, 'Azure': 1, 'GCP': 1}"
+REPLICATION="{'class':'SimpleStrategy','replication_factor':1}"
 
-/tmp/ebdse/ebdse activity type=cql yaml=telemetry tags=group:schema replication="{'class':'NetworkTopologyStrategy','AWS':3, 'Azure': 1, 'GCP': 1}" host=$IP username=assethub password=assethub
+/tmp/ebdse/ebdse activity type=cql yaml=telemetry tags=group:schema replication=$REPLICATION host=$IP
 
-/tmp/ebdse/ebdse activity type=cql yaml=telemetry cycles=1000000 tags=group:write host=$IP username=assethub password=assethub threads=20
+/tmp/ebdse/ebdse --enable-chart -v activity type=cql yaml=telemetry cycles=10000000000 tags=group:write host=$IP threads=1

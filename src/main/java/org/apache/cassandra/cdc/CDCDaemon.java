@@ -10,27 +10,39 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
 
+import com.codahale.metrics.ConsoleReporter;
+import com.codahale.metrics.Counter;
+import com.codahale.metrics.MetricRegistry;
+import com.codahale.metrics.Timer;
 import com.google.common.collect.Sets;
 
 import com.datastax.driver.core.Cluster;
-import org.apache.cassandra.config.CFMetaData;
 import org.apache.cassandra.config.Config;
 import org.apache.cassandra.config.DatabaseDescriptor;
-import org.apache.cassandra.config.Schema;
 import org.apache.cassandra.db.Mutation;
 import org.apache.cassandra.db.commitlog.CommitLogDescriptor;
 import org.apache.cassandra.db.commitlog.CommitLogPosition;
 import org.apache.cassandra.db.commitlog.CommitLogReadHandler;
 import org.apache.cassandra.db.commitlog.CommitLogReader;
-import org.apache.cassandra.utils.memory.BufferPool;
+import org.apache.cassandra.db.partitions.PartitionUpdate;
+import org.apache.cassandra.schema.Schema;
+import org.apache.cassandra.schema.TableId;
+import org.apache.cassandra.schema.TableMetadata;
+
+import static com.codahale.metrics.MetricRegistry.name;
 
 public class CDCDaemon
 {
+    private static MetricRegistry metrics = new MetricRegistry();
+    private static final Timer segmentsRead = metrics.timer(name(CDCDaemon.class, "segments"));
+    private static final Timer mutationsRead = metrics.timer(name(CDCDaemon.class, "mutations"));
+    private static final Counter nonCDCMutation = metrics.counter("non-cdc-mutation");
+    private static final Counter cdcDeletes = metrics.counter("cdc-deletes");
     private final ScheduledExecutorService executor = Executors.newScheduledThreadPool(4);
     private final Path commitlogDirectory = Paths.get(System.getProperty("cassandra.commitlog"));
     private final Path cdcRawDirectory = Paths.get(System.getProperty("cassandra.cdc_raw"));
     private final CDCHandler handler = new SimpleCount();
-    private final Set<UUID> unknownCfids = Sets.newConcurrentHashSet();
+    private final Set<TableId> unknownCfids = Sets.newConcurrentHashSet();
 
     private CDCDaemon()
     {
@@ -42,26 +54,28 @@ public class CDCDaemon
         new CDCDaemon().start();
     }
 
-    private void tryRead(Path p, boolean canDelete, boolean canReload)
+    private void tryRead(Path p, boolean canDelete, boolean canReload, boolean isFlushed)
     {
+        final Timer.Context context = segmentsRead.time();
         try
         {
             CommitLogReader reader = new CommitLogReader();
             CommitLogDescriptor descriptor = CommitLogDescriptor.fromFileName(p.toFile().getName());
             reader.readCommitLogSegment(handler, p.toFile(), handler.getPosition(descriptor.id), CommitLogReader.ALL_MUTATIONS, false);
-            if (reader.getInvalidMutations().isEmpty() && canDelete)
+            if (reader.getInvalidMutations().isEmpty() && canDelete && isFlushed)
             {
                 Files.delete(p);
+                cdcDeletes.inc();
             }
             else
             {
-                for (Map.Entry<UUID, AtomicInteger> entry : reader.getInvalidMutations())
+                for (Map.Entry<TableId, AtomicInteger> entry : reader.getInvalidMutations())
                 {
                     boolean newCfid = !unknownCfids.contains(entry.getKey());
                     if (canReload && newCfid)
                     {
                         reloadSchema();
-                        tryRead(p, canDelete, false);
+                        tryRead(p, canDelete, false, isFlushed);
                     }
                     else if (newCfid)
                     {
@@ -92,6 +106,9 @@ public class CDCDaemon
         {
             System.err.println("exception! " + e.getMessage());
         }
+        finally{
+            context.stop();
+        }
     }
 
     private void readFolder(Path directory, boolean canDelete)
@@ -100,9 +117,17 @@ public class CDCDaemon
         {
             List<Future<?>> futures = new ArrayList<>();
             Stream<Path> files = Files.list(directory);
+
             files.forEach(p -> {
                 futures.add(executor.submit(() -> {
-                    tryRead(p, canDelete, true);
+                    try {
+                        Stream<Path> unFlushedFiles = Files.list(commitlogDirectory);
+                        boolean isFlushed = unFlushedFiles.filter(x -> x.getFileName().toString().equals(p.getFileName().toString())).count() == 0;
+                        //p.getFileName().toString().equals(currentFile);
+                        tryRead(p, canDelete, true, isFlushed);
+                    }catch(Exception e){
+                        e.printStackTrace();
+                    }
                 }));
             });
             for (Future<?> future : futures)
@@ -145,21 +170,33 @@ public class CDCDaemon
     {
         for (String keyspaceName : Schema.instance.getKeyspaces())
         {
-            for (CFMetaData cfm : Schema.instance.getTablesAndViews(keyspaceName))
+            for (TableMetadata cfm : Schema.instance.getTablesAndViews(keyspaceName))
             {
-                Schema.instance.unload(cfm);
+                Schema.instance.unsafeUnload(cfm);
             }
         }
-        new RemoteSchema(Cluster.builder()
-                          .addContactPoint("localhost")
-                          .build()).load();
+        Cluster cluster = Cluster.builder()
+                .addContactPoint("localhost")
+                .withoutJMXReporting()
+                .build();
+
+        new RemoteSchema(cluster).load();
     }
 
     public void start()
     {
+        final ConsoleReporter reporter = ConsoleReporter.forRegistry(metrics)
+                .convertRatesTo(TimeUnit.SECONDS)
+                .convertDurationsTo(TimeUnit.MILLISECONDS)
+                .build();
+        reporter.start(1, TimeUnit.MINUTES);
+
         DatabaseDescriptor.toolInitialization();
         // Since CDC is only in newer Cassandras, we know how to read the schema values from it
         reloadSchema();
+
+        FileWatcher fw = new FileWatcher(commitlogDirectory, cdcRawDirectory);
+        fw.watchAndHardlink();
         executor.scheduleAtFixedRate(this::iteration, 0, 250, TimeUnit.MILLISECONDS);
     }
 
@@ -180,27 +217,38 @@ public class CDCDaemon
         }
 
         @Override
-        public void handleUnrecoverableError(CommitLogReadException exception) throws IOException
-        {
+        public void handleUnrecoverableError(CommitLogReadException exception) {
             exception.printStackTrace(System.err);
         }
 
         @Override
         public void handleMutation(Mutation m, int size, int entryLocation, CommitLogDescriptor desc)
         {
-            if (furthestPosition.getOrDefault(desc.id, 0) < entryLocation)
-            {
-                boolean cdc = false;
-                for (UUID cfId : m.getColumnFamilyIds())
+            final Timer.Context context = mutationsRead.time();
+            try{
+                if (furthestPosition.getOrDefault(desc.id, 0) < entryLocation)
                 {
-                    if (Schema.instance.getCFMetaData(cfId).params.cdc)
-                        cdc = true;
+                    boolean cdc = false;
+                    for (TableId cfId : m.getTableIds())
+                    {
+                        if (Schema.instance.getTableMetadata(cfId).params.cdc)
+                            cdc = true;
+                    }
+
+                    if (cdc) {
+                        //System.out.println("Reading mutation " + m.toString(true));
+                        for (PartitionUpdate partitionUpdate : m.getPartitionUpdates()) {
+                            //System.out.println(String.format("\tKey %s Contains partition update %s", m.key(), partitionUpdate.toString()));
+                        }
+                    }else{
+                        nonCDCMutation.inc();
+                    }
+
+                    furthestPosition.put(desc.id, entryLocation);
                 }
-
-                if (cdc)
-                    System.out.println("reading mutation " + m.toString(true));
-
-                furthestPosition.put(desc.id, entryLocation);
+            }
+            finally{
+                context.close();
             }
         }
 
