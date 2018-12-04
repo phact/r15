@@ -6,4 +6,4 @@ REPLICATION="{'class':'SimpleStrategy','replication_factor':1}"
 
 /tmp/ebdse/ebdse activity type=cql yaml=telemetry tags=group:schema replication=$REPLICATION host=$IP
 
-/tmp/ebdse/ebdse --enable-chart -v activity type=cql yaml=telemetry cycles=10000000000 tags=group:write host=$IP threads=1
+/tmp/ebdse/ebdse --enable-chart activity type=cql yaml=telemetry cycles=10000000000 tags=group:write host=$IP threads=1 targetrate=100 errors=warn,retryable=count

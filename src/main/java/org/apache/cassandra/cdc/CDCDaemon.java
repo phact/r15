@@ -41,8 +41,10 @@ public class CDCDaemon
     private final ScheduledExecutorService executor = Executors.newScheduledThreadPool(4);
     private final Path commitlogDirectory = Paths.get(System.getProperty("cassandra.commitlog"));
     private final Path cdcRawDirectory = Paths.get(System.getProperty("cassandra.cdc_raw"));
-    private final CDCHandler handler = new SimpleCount();
     private final Set<TableId> unknownCfids = Sets.newConcurrentHashSet();
+
+    private TCPServer.QueueWriterAdapter outputQueue;
+    private CDCHandler handler ;
 
     private CDCDaemon()
     {
@@ -197,6 +199,11 @@ public class CDCDaemon
 
         FileWatcher fw = new FileWatcher(commitlogDirectory, cdcRawDirectory);
         fw.watchAndHardlink();
+
+        TCPServer tcpServer = new TCPServer();
+        outputQueue = tcpServer.createTCPServer();
+        handler = new SimpleCount(outputQueue);
+
         executor.scheduleAtFixedRate(this::iteration, 0, 250, TimeUnit.MILLISECONDS);
     }
 
@@ -208,6 +215,11 @@ public class CDCDaemon
     private static class SimpleCount implements CDCHandler
     {
         private final Map<Long, Integer> furthestPosition = new HashMap<>();
+        private final TCPServer.QueueWriterAdapter outputQueue;
+
+        public SimpleCount(TCPServer.QueueWriterAdapter outputQueue) {
+            this.outputQueue = outputQueue;
+        }
 
         @Override
         public boolean shouldSkipSegmentOnError(CommitLogReadException exception) throws IOException
@@ -239,6 +251,7 @@ public class CDCDaemon
                         //System.out.println("Reading mutation " + m.toString(true));
                         for (PartitionUpdate partitionUpdate : m.getPartitionUpdates()) {
                             //System.out.println(String.format("\tKey %s Contains partition update %s", m.key(), partitionUpdate.toString()));
+                            outputQueue.write(partitionUpdate.toString());
                         }
                     }else{
                         nonCDCMutation.inc();
@@ -246,8 +259,9 @@ public class CDCDaemon
 
                     furthestPosition.put(desc.id, entryLocation);
                 }
-            }
-            finally{
+            } catch (IOException e) {
+                e.printStackTrace();
+            } finally{
                 context.close();
             }
         }

@@ -87,8 +87,8 @@ public class FileWatcher {
     }
 
     private void hardLink(Path filename){
-        Path newLink = this.cdcRawDirectory.resolve(filename);
-        Path existingFile = this.commitlogDirectory.resolve(filename);
+        Path newLink = this.cdcRawDirectory.resolve(filename.getFileName());
+        Path existingFile = this.commitlogDirectory.resolve(filename.getFileName());
         try {
             Files.createLink(newLink, existingFile);
         } catch (FileAlreadyExistsException x) {
