@@ -1,4 +1,4 @@
-package org.apache.cassandra.cdc;
+package powertools.cdc;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -53,6 +53,10 @@ public class CDCDaemon
 
     public static void main(String[] args)
     {
+        System.out.println(System.getProperties());
+        System.out.println(System.getProperty("os.name"));
+        System.out.println(System.getProperty("cassandra.commitlog"));
+        System.out.println(System.getProperty("cassandra.cdc_raw"));
         new CDCDaemon().start();
     }
 
@@ -125,6 +129,7 @@ public class CDCDaemon
                     try {
                         Stream<Path> unFlushedFiles = Files.list(commitlogDirectory);
                         boolean isFlushed = unFlushedFiles.filter(x -> x.getFileName().toString().equals(p.getFileName().toString())).count() == 0;
+                        unFlushedFiles.close();
                         //p.getFileName().toString().equals(currentFile);
                         tryRead(p, canDelete, true, isFlushed);
                     }catch(Exception e){
@@ -132,6 +137,8 @@ public class CDCDaemon
                     }
                 }));
             });
+            files.close();
+
             for (Future<?> future : futures)
             {
                 future.get();

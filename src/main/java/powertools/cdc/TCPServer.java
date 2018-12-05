@@ -1,4 +1,4 @@
-package org.apache.cassandra.cdc;
+package powertools.cdc;
 
 /*
  *

@@ -1,4 +1,4 @@
-package org.apache.cassandra.cdc;
+package powertools.cdc;
 
 /*
  *
@@ -30,6 +30,7 @@ public class FileWatcher {
         try {
             Stream<Path> files = Files.list(commitlogDirectory);
             files.forEach(this::hardLink);
+            files.close();
         } catch (IOException e) {
             e.printStackTrace();
         }

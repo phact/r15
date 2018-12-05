@@ -1,4 +1,4 @@
-package org.apache.cassandra.cdc;
+package powertools.cdc;
 
 import java.io.BufferedInputStream;
 import java.io.InputStream;
