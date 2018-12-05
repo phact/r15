@@ -3,14 +3,21 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
                           http://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
-  <groupId>org.apache.cassandra.cdc</groupId>
+  <groupId>powertools.cdc</groupId>
   <artifactId>cdcdaemon</artifactId>
   <packaging>jar</packaging>
   <version>1.0-SNAPSHOT</version>
   <name>CDC Example Daemon</name>
   <properties>
-    <mainClass>org.apache.cassandra.cdc.CDCDaemon</mainClass>
+    <mainClass>powertools.cdc.CDCDaemon</mainClass>
   </properties>
+
+  <repositories>
+    <repository>
+      <id>my</id>
+      <url>file://${basedir}/repo</url>
+    </repository>
+  </repositories>
 
   <dependencies>
     <dependency>
@@ -22,17 +29,13 @@
     <dependency>
       <groupId>org.apache.cassandra</groupId>
       <artifactId>cassandra-all</artifactId>
-      <scope>system</scope>
-      <version>LATEST</version>
-      <systemPath>${project.basedir}/src/main/resources/dse-db-all-6.7.0.jar</systemPath>
+      <version>6.7</version>
     </dependency>
 
     <dependency>
       <groupId>org.apache.cassandra</groupId>
       <artifactId>dse-core</artifactId>
-      <scope>system</scope>
-      <version>LATEST</version>
-      <systemPath>${project.basedir}/src/main/resources/dse-core-6.7.0.jar</systemPath>
+      <version>6.7</version>
     </dependency>
 
     <dependency>
@@ -164,7 +167,15 @@
         <artifactId>maven-shade-plugin</artifactId>
         <version>2.4.1</version>
         <configuration>
-          <createDependencyReducedPom>true</createDependencyReducedPom>
+          <createDependencyReducedPom>false</createDependencyReducedPom>
+          <shadedArtifactAttached>true</shadedArtifactAttached>
+          <shadedClassifierName>all</shadedClassifierName>
+          <artifactSet>
+            <includes>
+              <include>*:*</include>
+            </includes>
+          </artifactSet>
+          <minimizeJar>false</minimizeJar>
           <transformers>
             <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
             <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
